@@ -218,7 +218,7 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
     card.set_halign(gtk::Align::Center);
     card.set_valign(gtk::Align::Center);
 
-    let heading = gtk::Label::new(Some("Set the clock"));
+    let heading = gtk::Label::new(Some("Set date and time"));
     heading.add_css_class("kiosk-settime-heading");
     card.append(&heading);
 
@@ -268,7 +268,7 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
     summary.set_wrap(true);
     card.append(&summary);
 
-    let set_btn = gtk::Button::with_label("Set clock");
+    let set_btn = gtk::Button::with_label("Set");
     set_btn.add_css_class("kiosk-settime-set");
 
     // Bumped every time the button enters "& restart", so an arm timer for a
@@ -323,7 +323,7 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
             }
 
             if restarts {
-                set_btn.set_label("Set clock & restart");
+                set_btn.set_label("Set & restart");
                 set_btn.add_css_class("kiosk-settime-set-restart");
                 let mine = generation.get().wrapping_add(1);
                 generation.set(mine);
@@ -341,7 +341,7 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
                     },
                 );
             } else {
-                set_btn.set_label("Set clock");
+                set_btn.set_label("Set");
                 set_btn.remove_css_class("kiosk-settime-set-restart");
                 set_btn.set_sensitive(true);
             }
