@@ -15,6 +15,7 @@ mod outputs;
 mod protocols;
 mod radial;
 mod shared;
+mod shutdown;
 mod status;
 mod style;
 mod surface;

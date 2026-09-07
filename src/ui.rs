@@ -207,6 +207,12 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
         .collect();
     let confirms = std::rc::Rc::new(confirms);
 
+    // Above even the cards: a pending restart covers the whole kiosk. Hidden
+    // until the marker file appears -- see shutdown.rs.
+    let restarting = crate::shutdown::build();
+    overlay.add_overlay(&restarting.widget);
+    shared.register_restarting(restarting);
+
     // Clicking the dimmed area closes whatever opened it.
     {
         let fans = fans.clone();

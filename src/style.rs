@@ -192,6 +192,24 @@ window.kiosk-root {
 /* The arming window made visible, so it reads as a button waking up rather
  * than a kiosk that has hung -- see ARM_MS in confirm.rs. */
 .kiosk-confirm-yes:disabled { opacity: 0.45; background-image: none; }
+
+/* ── the restart screen ──────────────────────────────────────────────────── */
+/* Opaque, not a scrim: nothing of the kiosk should show through or invite a
+ * tap while the machine is on its way down. Same background as the root. */
+.kiosk-restarting { background-color: #10141a; }
+.kiosk-restarting-spinner {
+    min-width: 48px;
+    min-height: 48px;
+    color: #6ea8ff;
+}
+.kiosk-restarting-heading {
+    font-size: 30px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #f2f6fa;
+    margin-top: 12px;
+}
+.kiosk-restarting-body { font-size: 18px; color: #c2ccd8; }
 ";
 
 /// Per-button icon colours, rendered as a stylesheet.

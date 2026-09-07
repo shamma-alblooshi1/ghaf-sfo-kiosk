@@ -13,7 +13,7 @@
 // tiiuae/ghaf-sfo-laptop has the measurements. So surfaces stay independent and
 // only STATE is shared -- geometry stays per-output, as it should.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -22,6 +22,7 @@ use crate::actions::{Busy, Reporter};
 use crate::banner::Banner;
 use crate::confirm::Confirm;
 use crate::radial::Fan;
+use crate::shutdown::{MonitorHold, Restarting};
 
 /// A `Reporter` that says the same thing on every output.
 #[derive(Clone, Default)]
@@ -69,6 +70,16 @@ pub struct Shared {
     /// open, cancel and confirm as one, while two different buttons stay
     /// independent.
     confirms: Rc<RefCell<Vec<(String, Confirm)>>>,
+    /// Every output's restart screen. No id: a pending restart is one state for
+    /// the whole machine, so they all show or hide together.
+    restarting: Rc<RefCell<Vec<Restarting>>>,
+    /// Whether the restart screen is up, so a surface built or hotplugged after
+    /// the marker appeared still shows it. The `restarting` list alone cannot
+    /// answer this: the watch may see the marker before any surface exists.
+    restart_pending: Rc<Cell<bool>>,
+    /// The marker-file monitor that drives `restarting`. Parked here so it
+    /// lives as long as the surfaces -- see shutdown.rs.
+    restart_monitor: MonitorHold,
 }
 
 impl Shared {
@@ -120,6 +131,9 @@ impl Shared {
         self.confirms
             .borrow_mut()
             .retain(|(_, c)| c.widget.root().is_some());
+        self.restarting
+            .borrow_mut()
+            .retain(|r| r.widget.root().is_some());
     }
 
     /// Register one output's fan and link it to its peers on other outputs.
@@ -175,6 +189,39 @@ impl Shared {
                 }
             }
         });
+    }
+
+    /// Register one output's restart screen. Driven by the marker-file watch
+    /// (shutdown.rs), which shows or hides them all at once. If the marker is
+    /// already up, this one shows straight away.
+    pub fn register_restarting(&self, restarting: Restarting) {
+        if self.restart_pending.get() {
+            restarting.show();
+        }
+        self.restarting.borrow_mut().push(restarting);
+    }
+
+    /// Raise the restart screen on every output. Cloned out of the cell first,
+    /// matching `Broadcast::info`: a `show` must not run while the borrow is held.
+    pub fn show_restarting(&self) {
+        self.restart_pending.set(true);
+        let all: Vec<Restarting> = self.restarting.borrow().clone();
+        for r in &all {
+            r.show();
+        }
+    }
+
+    pub fn hide_restarting(&self) {
+        self.restart_pending.set(false);
+        let all: Vec<Restarting> = self.restarting.borrow().clone();
+        for r in &all {
+            r.hide();
+        }
+    }
+
+    /// Park the marker-file monitor for the lifetime of the run.
+    pub fn hold_restart_monitor(&self, monitor: gtk::gio::FileMonitor) {
+        self.restart_monitor.set(monitor);
     }
 }
 
