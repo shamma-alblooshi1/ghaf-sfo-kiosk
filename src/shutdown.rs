@@ -54,13 +54,21 @@ impl Restarting {
     }
 }
 
-/// Build one output's restart screen. Hidden until `show`.
-pub fn build() -> Restarting {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 20);
+/// Build one output's restart screen. Hidden until `show`. `logo` is the same
+/// path the status bar uses (the Ghaf mark on SFO), shown above the text.
+pub fn build(logo: Option<&str>) -> Restarting {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 24);
     content.set_halign(gtk::Align::Center);
     content.set_valign(gtk::Align::Center);
     content.set_hexpand(true);
     content.set_vexpand(true);
+
+    if let Some(path) = logo {
+        let image = crate::ui::icon_image(path);
+        image.set_pixel_size(120);
+        image.add_css_class("kiosk-restarting-logo");
+        content.append(&image);
+    }
 
     let spinner = gtk::Spinner::new();
     spinner.add_css_class("kiosk-restarting-spinner");
@@ -84,6 +92,20 @@ pub fn build() -> Restarting {
     widget.append(&content);
 
     Restarting { widget, spinner }
+}
+
+/// Ask for the restart screen: raise it now and drop the marker so a kiosk
+/// crash-restart in the window that follows comes back showing it. Called by
+/// settime.rs after a restart-bound correction; the marker also lets anything
+/// else (a GIVC poweroff hook, a technician script) trigger the same screen.
+pub fn request_restart(shared: &Shared) {
+    shared.show_restarting();
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let path = std::path::Path::new(&dir).join(MARKER);
+        if let Err(e) = std::fs::File::create(&path) {
+            log::warn!("could not write the restart marker {}: {e}", path.display());
+        }
+    }
 }
 
 /// Watch the marker file and drive every output's restart screen from it.
@@ -118,7 +140,9 @@ pub fn watch(shared: &Shared) {
 
     let on_change = shared.clone();
     monitor.connect_changed(move |_monitor, _file, _other, event| match event {
-        gio::FileMonitorEvent::Created | gio::FileMonitorEvent::ChangesDoneHint => {
+        // Created only, not ChangesDoneHint: one `create` write emits both, and
+        // show_restarting is idempotent but the double log line is noise.
+        gio::FileMonitorEvent::Created => {
             log::info!("restart marker appeared; showing the restart screen");
             on_change.show_restarting();
         }

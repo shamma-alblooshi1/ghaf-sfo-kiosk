@@ -193,13 +193,97 @@ window.kiosk-root {
  * than a kiosk that has hung -- see ARM_MS in confirm.rs. */
 .kiosk-confirm-yes:disabled { opacity: 0.45; background-image: none; }
 
+/* ── the Set Time card ───────────────────────────────────────────────────── */
+/* Reuses .kiosk-scrim, a second instance of it, exactly as .kiosk-confirm does. */
+.kiosk-settime-card {
+    background-color: #1d2530;
+    border: 1px solid #2b3542;
+    border-radius: 18px;
+    padding: 32px 40px;
+    margin-bottom: 48px;
+}
+.kiosk-settime-heading {
+    font-size: 26px;
+    font-weight: bold;
+    color: #f2f6fa;
+    margin-bottom: 24px;
+}
+/* −  [ value ]  +  steppers: one look for date and time alike. */
+.kiosk-settime-step {
+    min-width: 56px;
+    min-height: 56px;
+    padding: 0;
+    font-size: 26px;
+    font-weight: bold;
+    color: #f2f6fa;
+    background-color: #161b23;
+    background-image: none;
+    box-shadow: none;
+    border: 1px solid #2b3542;
+    border-radius: 12px;
+}
+.kiosk-settime-step:hover {
+    background-color: #222c39;
+    background-image: none;
+    border-color: #46596f;
+}
+.kiosk-settime-value {
+    min-width: 84px;
+    padding: 0 10px;
+    font-size: 30px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    color: #f2f6fa;
+    background-color: #161b23;
+    border: 1px solid #2b3542;
+    border-radius: 12px;
+}
+.kiosk-settime-caption { font-size: 13px; color: #8a97a6; }
+.kiosk-settime-summary {
+    font-size: 17px;
+    color: #c2ccd8;
+    margin-top: 20px;
+    min-height: 24px;
+}
+.kiosk-settime-actions { margin-top: 28px; }
+.kiosk-settime-actions button {
+    min-width: 200px;
+    min-height: 72px;
+    font-size: 20px;
+    font-weight: bold;
+    border-radius: 12px;
+    background-image: none;
+    box-shadow: none;
+}
+.kiosk-settime-cancel {
+    background-color: #33445a;
+    border: 1px solid #6ea8ff;
+    color: #ffffff;
+}
+.kiosk-settime-cancel:hover { background-color: #3d5169; background-image: none; }
+.kiosk-settime-set {
+    background-color: #1f5136;
+    border: 1px solid #2f7a50;
+    color: #d9ffe8;
+}
+.kiosk-settime-set:hover { background-color: #276244; background-image: none; }
+/* The restart variant, in the error/destructive palette the confirm card uses. */
+.kiosk-settime-set-restart {
+    background-color: #4a1f26;
+    border: 1px solid #7a3340;
+    color: #ffd9dd;
+}
+.kiosk-settime-set-restart:hover { background-color: #5c2830; background-image: none; }
+.kiosk-settime-set:disabled { opacity: 0.45; background-image: none; }
+
 /* ── the restart screen ──────────────────────────────────────────────────── */
 /* Opaque, not a scrim: nothing of the kiosk should show through or invite a
  * tap while the machine is on its way down. Same background as the root. */
 .kiosk-restarting { background-color: #10141a; }
+.kiosk-restarting-logo { margin-bottom: 8px; }
 .kiosk-restarting-spinner {
-    min-width: 48px;
-    min-height: 48px;
+    min-width: 40px;
+    min-height: 40px;
     color: #6ea8ff;
 }
 .kiosk-restarting-heading {

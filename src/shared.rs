@@ -22,6 +22,7 @@ use crate::actions::{Busy, Reporter};
 use crate::banner::Banner;
 use crate::confirm::Confirm;
 use crate::radial::Fan;
+use crate::settime::SetTime;
 use crate::shutdown::{MonitorHold, Restarting};
 
 /// A `Reporter` that says the same thing on every output.
@@ -70,6 +71,9 @@ pub struct Shared {
     /// open, cancel and confirm as one, while two different buttons stay
     /// independent.
     confirms: Rc<RefCell<Vec<(String, Confirm)>>>,
+    /// (button id, card). Keyed like `confirms`: the same Set Time button on
+    /// two outputs opens and closes as one.
+    settimes: Rc<RefCell<Vec<(String, SetTime)>>>,
     /// Every output's restart screen. No id: a pending restart is one state for
     /// the whole machine, so they all show or hide together.
     restarting: Rc<RefCell<Vec<Restarting>>>,
@@ -131,6 +135,9 @@ impl Shared {
         self.confirms
             .borrow_mut()
             .retain(|(_, c)| c.widget.root().is_some());
+        self.settimes
+            .borrow_mut()
+            .retain(|(_, s)| s.widget.root().is_some());
         self.restarting
             .borrow_mut()
             .retain(|r| r.widget.root().is_some());
@@ -184,6 +191,30 @@ impl Shared {
                     continue;
                 }
                 // Terminates: GTK emits `toggled` only on a real change.
+                if peer.is_open() != open {
+                    peer.set_open(open);
+                }
+            }
+        });
+    }
+
+    /// Register one output's Set Time card and link it to its peers, so the
+    /// same button's card opens and closes on every screen at once -- the same
+    /// shape and reason as `register_confirm`.
+    pub fn register_settime(&self, button_id: &str, settime: &SetTime) {
+        self.settimes
+            .borrow_mut()
+            .push((button_id.to_owned(), settime.clone()));
+
+        let settimes = self.settimes.clone();
+        let id = button_id.to_owned();
+        let me = settime.clone();
+        settime.connect_toggled(move |open| {
+            let peers: Vec<(String, SetTime)> = settimes.borrow().clone();
+            for (peer_id, peer) in &peers {
+                if peer_id != &id || peer.same_as(&me) {
+                    continue;
+                }
                 if peer.is_open() != open {
                     peer.set_open(open);
                 }

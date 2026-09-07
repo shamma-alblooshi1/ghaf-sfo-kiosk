@@ -14,6 +14,7 @@ mod confirm;
 mod outputs;
 mod protocols;
 mod radial;
+mod settime;
 mod shared;
 mod shutdown;
 mod status;
