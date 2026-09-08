@@ -12,14 +12,15 @@
 //! `gtk::ToggleButton` carrying open/closed, so shared.rs keeps the card in
 //! lockstep across outputs with the same path it uses for a fan or a card.
 //!
-//! Five matching steppers -- day / month / year, then hour / minute -- rather
-//! than a calendar: one visual language, big touch targets, and the real use
-//! is nudging hours on a device with no other clock. One primary button that
-//! always shows the size of the change and, at or above `reboot_threshold_sec`,
-//! says the machine will restart, takes the destructive styling and goes dead
-//! for a moment so a double tap cannot reach it. On confirm the kiosk writes
-//! `YYYY-MM-DD HH:MM` to net-vm's socket itself; a large correction goes
-//! straight into the restart screen (shutdown.rs).
+//! A `gtk::Calendar` for the date, then two steppers -- hour / minute -- for the
+//! time: the calendar makes a month/year jump one gesture, the steppers keep big
+//! touch targets for the common case of nudging the clock on a device with no
+//! other reference. One primary button that always shows the size of the change
+//! and, at or above `reboot_threshold_sec`, says the machine will restart, takes
+//! the destructive styling and goes dead for a moment so a double tap cannot
+//! reach it. On confirm the kiosk writes `YYYY-MM-DD HH:MM` to net-vm's socket
+//! itself; a large correction goes straight into the restart screen
+//! (shutdown.rs).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -42,14 +43,6 @@ const ARM_MS: u32 = 600;
 /// Read cap on the socket reply: the helper answers `ok` or a short
 /// `error: ...` line.
 const REPLY_CAP: usize = 256;
-
-/// Year bounds, matching the helper's own range check on net-vm.
-const YEAR_LO: i32 = 2024;
-const YEAR_HI: i32 = 2100;
-
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
 
 #[derive(Clone)]
 pub struct SetTime {
@@ -79,16 +72,6 @@ impl SetTime {
     }
     pub fn same_as(&self, other: &SetTime) -> bool {
         self.state == other.state
-    }
-}
-
-fn days_in_month(year: i32, month: i32) -> i32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
-        2 => 28,
-        _ => 31,
     }
 }
 
@@ -222,45 +205,43 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
     heading.add_css_class("kiosk-settime-heading");
     card.append(&heading);
 
-    // Shared so every stepper's `−`/`+` triggers the same recompute. Starts a
-    // no-op because the steppers exist before `recompute` does.
+    // Shared so the calendar and every stepper's `−`/`+` trigger the same
+    // recompute. Starts a no-op because the controls exist before `recompute`.
     let notify: Rc<RefCell<Box<dyn Fn()>>> = Rc::new(RefCell::new(Box::new(|| {})));
 
-    let day = Rc::new(stepper("day", 1, 31, true, two_digit(), notify.clone()));
-    let month = Rc::new(stepper(
-        "month",
-        1,
-        12,
-        true,
-        Rc::new(|v| MONTHS[(v - 1).clamp(0, 11) as usize].to_owned()),
-        notify.clone(),
-    ));
-    let year = Rc::new(stepper(
-        "year",
-        YEAR_LO,
-        YEAR_HI,
-        false,
-        Rc::new(|v| v.to_string()),
-        notify.clone(),
-    ));
+    // Date: a real month grid. gtk::Calendar's `month` is 0-based; every read
+    // below adds one to match the wire format and glib::DateTime.
+    let calendar = gtk::Calendar::new();
+    calendar.add_css_class("kiosk-settime-calendar");
+    // `day-selected` covers a day tap and a programmatic `select_day`;
+    // `notify::month` / `notify::year` cover the header arrows, which page the
+    // grid without touching the day.
+    calendar.connect_day_selected({
+        let notify = notify.clone();
+        move |_| (notify.borrow())()
+    });
+    for prop in ["month", "year"] {
+        calendar.connect_notify_local(Some(prop), {
+            let notify = notify.clone();
+            move |_, _| (notify.borrow())()
+        });
+    }
+
     let hour = Rc::new(stepper("hour", 0, 23, true, two_digit(), notify.clone()));
     let minute = Rc::new(stepper("minute", 0, 59, true, two_digit(), notify.clone()));
 
-    let date_row = gtk::Box::new(gtk::Orientation::Horizontal, 22);
-    date_row.set_halign(gtk::Align::Center);
-    for s in [&day, &month, &year] {
-        date_row.append(&s.root);
-    }
-    let time_row = gtk::Box::new(gtk::Orientation::Horizontal, 22);
-    time_row.set_halign(gtk::Align::Center);
+    let time_col = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+    time_col.set_valign(gtk::Align::Center);
     for s in [&hour, &minute] {
-        time_row.append(&s.root);
+        time_col.append(&s.root);
     }
-    let steppers = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    steppers.set_halign(gtk::Align::Center);
-    steppers.append(&date_row);
-    steppers.append(&time_row);
-    card.append(&steppers);
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 26);
+    controls.add_css_class("kiosk-settime-controls");
+    controls.set_halign(gtk::Align::Center);
+    controls.append(&calendar);
+    controls.append(&time_col);
+    card.append(&controls);
 
     let summary = gtk::Label::new(None);
     summary.add_css_class("kiosk-settime-summary");
@@ -276,30 +257,19 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
     let generation = Rc::new(Cell::new(0u64));
 
     let recompute: Rc<dyn Fn()> = {
-        let (day, month, year, hour, minute) = (
-            day.clone(),
-            month.clone(),
-            year.clone(),
-            hour.clone(),
-            minute.clone(),
-        );
+        let calendar = calendar.clone();
+        let (hour, minute) = (hour.clone(), minute.clone());
         let summary = summary.clone();
         let set_btn = set_btn.clone();
         let generation = generation.clone();
         Rc::new(move || {
-            // Keep the day inside the selected month.
-            let dim = days_in_month(year.get(), month.get());
-            if day.get() > dim {
-                day.set(dim);
-            }
-
             let Ok(now) = glib::DateTime::now_local() else {
                 return;
             };
             let Ok(target) = glib::DateTime::from_local(
-                year.get(),
-                month.get(),
-                day.get(),
+                calendar.year(),
+                calendar.month() + 1,
+                calendar.day(),
                 hour.get(),
                 minute.get(),
                 0.0,
@@ -375,21 +345,14 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
         let sheet = sheet.clone();
         let dim = dim.clone();
         let recompute = recompute.clone();
-        let (day, month, year, hour, minute) = (
-            day.clone(),
-            month.clone(),
-            year.clone(),
-            hour.clone(),
-            minute.clone(),
-        );
+        let calendar = calendar.clone();
+        let (hour, minute) = (hour.clone(), minute.clone());
         move |t| {
             if t.is_active() {
                 // Every open starts from the current clock, so the card shows
                 // "No change" until the operator moves something.
                 if let Ok(now) = glib::DateTime::now_local() {
-                    year.set(now.year());
-                    month.set(now.month());
-                    day.set(now.day_of_month());
+                    calendar.select_day(&now);
                     hour.set(now.hour());
                     minute.set(now.minute());
                 }
@@ -420,16 +383,17 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
         let shared = shared.clone();
         let reporter = reporter.clone();
         let host = host.clone();
-        let (day, month, year, hour, minute) = (day, month, year, hour, minute);
+        let calendar = calendar.clone();
+        let (hour, minute) = (hour, minute);
         set_btn.connect_clicked(move |btn| {
             if !me.is_open() {
                 return;
             }
             let want = format!(
                 "{:04}-{:02}-{:02} {:02}:{:02}",
-                year.get(),
-                month.get(),
-                day.get(),
+                calendar.year(),
+                calendar.month() + 1,
+                calendar.day(),
                 hour.get(),
                 minute.get()
             );

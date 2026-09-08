@@ -208,7 +208,55 @@ window.kiosk-root {
     color: #f2f6fa;
     margin-bottom: 24px;
 }
-/* −  [ value ]  +  steppers: one look for date and time alike. */
+/* Date is a restyled month grid; the time stays −  [ value ]  +  steppers. */
+.kiosk-settime-controls { margin-bottom: 4px; }
+.kiosk-settime-calendar {
+    background-color: #161b23;
+    border: 1px solid #2b3542;
+    border-radius: 14px;
+    padding: 12px 14px;
+    color: #f2f6fa;
+    font-size: 15px;
+}
+.kiosk-settime-calendar > header { margin-bottom: 8px; }
+.kiosk-settime-calendar > header label {
+    font-size: 16px;
+    font-weight: bold;
+    color: #f2f6fa;
+}
+.kiosk-settime-calendar > header button {
+    background: none;
+    background-image: none;
+    box-shadow: none;
+    border: none;
+    color: #c2ccd8;
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 8px;
+}
+.kiosk-settime-calendar > header button:hover {
+    background-color: #222c39;
+    color: #f2f6fa;
+}
+.kiosk-settime-calendar grid label {
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 9px;
+    color: #f2f6fa;
+}
+.kiosk-settime-calendar grid label.day-name {
+    font-size: 12px;
+    font-weight: bold;
+    color: #8a97a6;
+}
+.kiosk-settime-calendar grid label.other { color: #4a5563; }
+.kiosk-settime-calendar grid label:hover { background-color: #222c39; }
+.kiosk-settime-calendar grid label:selected {
+    background-color: #33445a;
+    color: #ffffff;
+    font-weight: bold;
+    box-shadow: inset 0 0 0 1px #6ea8ff;
+}
 .kiosk-settime-step {
     min-width: 56px;
     min-height: 56px;
