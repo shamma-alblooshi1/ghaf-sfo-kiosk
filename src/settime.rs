@@ -230,8 +230,8 @@ pub fn build(host: &str, port: u16, threshold_sec: u32, shared: &Shared) -> SetT
     let hour = Rc::new(stepper("hour", 0, 23, true, two_digit(), notify.clone()));
     let minute = Rc::new(stepper("minute", 0, 59, true, two_digit(), notify.clone()));
 
-    let time_col = gtk::Box::new(gtk::Orientation::Horizontal, 18);
-    time_col.set_valign(gtk::Align::Center);
+    let time_col = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    time_col.set_halign(gtk::Align::Center);
     for s in [&hour, &minute] {
         time_col.append(&s.root);
     }
