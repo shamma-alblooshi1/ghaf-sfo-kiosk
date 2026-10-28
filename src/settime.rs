@@ -23,8 +23,9 @@
 //!
 //! **The restart verdict is the host's.** It reboots on the clock's distance
 //! from its boot anchor, not on the size of the gesture, so the card asks
-//! `verdict_host:verdict_port` rather than working it out. Falls back to the
-//! gesture, marked "unconfirmed", when the host cannot be reached.
+//! `verdict_host:verdict_port` rather than working it out, again every
+//! `REFRESH_SECS` while open and once more on Set. Falls back to the gesture,
+//! marked "unconfirmed", when the host cannot be reached.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -48,6 +49,13 @@ const ARM_MS: u32 = 600;
 /// Long enough that holding `+` is one query, short enough not to be noticed.
 const ASK_DEBOUNCE_MS: u32 = 250;
 
+/// While open, the card refreshes this often: for a fixed target the difference
+/// and the host's answer both drift as the clock runs.
+const REFRESH_SECS: u32 = 10;
+
+/// Set waits on the verdict, so a stalled host must not leave the button dead.
+const ASK_TIMEOUT_SECS: u32 = 3;
+
 /// Read cap on the socket reply: the helper answers `ok` or a short
 /// `error: ...` line, and the verdict socket two short lines.
 const REPLY_CAP: usize = 256;
@@ -63,6 +71,9 @@ type Verdict = Rc<RefCell<Option<(String, bool, i64)>>>;
 
 /// Deferred, because the asker calls `recompute` and `recompute` calls it.
 type AskVerdict = Rc<RefCell<Box<dyn Fn(&str)>>>;
+
+/// `None` on any failure: callers fall back rather than report.
+type OnVerdict = Box<dyn FnOnce(Option<(bool, i64)>)>;
 
 /// `restart`/`no-restart` plus `displacement_after=` from a targeted reply.
 fn parse_verdict(reply: &str) -> Option<(bool, i64)> {
@@ -103,6 +114,8 @@ pub struct SetTime {
     state: gtk::ToggleButton,
     /// The primary button, so a failed send can re-enable it.
     set_btn: gtk::Button,
+    /// A confirm is in flight: the refresh must not re-enable the button.
+    busy: Rc<Cell<bool>>,
 }
 
 impl SetTime {
@@ -123,6 +136,10 @@ impl SetTime {
     }
     pub fn same_as(&self, other: &SetTime) -> bool {
         self.state == other.state
+    }
+    fn ready(&self) {
+        self.busy.set(false);
+        self.set_btn.set_sensitive(true);
     }
 }
 
@@ -260,6 +277,9 @@ pub fn build(
     let reporter = shared.reporter();
     let standing: Standing = Rc::new(Cell::new(None));
     let verdict: Verdict = Rc::new(RefCell::new(None));
+    // Set by the refresh tick: the cached answer is for an earlier clock.
+    let aged = Rc::new(Cell::new(false));
+    let busy = Rc::new(Cell::new(false));
     // Filled once `recompute` exists, like `notify` below: the asker has to
     // call recompute, and recompute has to call the asker.
     // `|_: &str|` annotated: a bare `|_|` will not infer into `dyn Fn(&str)`.
@@ -342,6 +362,8 @@ pub fn build(
         let generation = generation.clone();
         let standing = standing.clone();
         let verdict = verdict.clone();
+        let aged = aged.clone();
+        let busy = busy.clone();
         let schedule_ask = schedule_ask.clone();
         Rc::new(move || {
             let Ok(now) = glib::DateTime::now_local() else {
@@ -382,7 +404,8 @@ pub fn build(
                 .unwrap_or_else(|| after.map_or(mag >= threshold, |a| a.abs() >= threshold));
             let confirmed = answered.is_some();
 
-            if answered.is_none() && mag >= 60 {
+            // Aged: re-ask, but keep the old answer up until the new one lands.
+            if (answered.is_none() || aged.get()) && mag >= 60 {
                 (schedule_ask.borrow())(&want);
             }
 
@@ -413,7 +436,8 @@ pub fn build(
                 summary.set_text(&format!("{} {dir} \u{2014} {tail}", human(mag)));
             }
 
-            if restarts {
+            // Arm only on entry: the refresh recomputes every tick.
+            if restarts && !set_btn.has_css_class("kiosk-settime-set-restart") {
                 set_btn.set_label("Set & restart");
                 set_btn.add_css_class("kiosk-settime-set-restart");
                 let mine = generation.get().wrapping_add(1);
@@ -424,17 +448,18 @@ pub fn build(
                     {
                         let set_btn = set_btn.clone();
                         let generation = generation.clone();
+                        let busy = busy.clone();
                         move || {
-                            if generation.get() == mine {
+                            if generation.get() == mine && !busy.get() {
                                 set_btn.set_sensitive(true);
                             }
                         }
                     },
                 );
-            } else {
+            } else if !restarts {
                 set_btn.set_label("Set");
                 set_btn.remove_css_class("kiosk-settime-set-restart");
-                set_btn.set_sensitive(true);
+                set_btn.set_sensitive(!busy.get());
             }
         })
     };
@@ -447,15 +472,17 @@ pub fn build(
     // the pending one, so holding `+` costs a single query when it stops.
     *schedule_ask.borrow_mut() = Box::new({
         let verdict = verdict.clone();
+        let aged = aged.clone();
         let recompute = recompute.clone();
         let verdict_host = verdict_host.clone();
         let pending = Rc::new(Cell::new(0u64));
         move |want: &str| {
             let mine = pending.get().wrapping_add(1);
             pending.set(mine);
-            let (want, verdict, recompute, host, pending) = (
+            let (want, verdict, aged, recompute, host, pending) = (
                 want.to_owned(),
                 verdict.clone(),
+                aged.clone(),
                 recompute.clone(),
                 verdict_host.clone(),
                 pending.clone(),
@@ -463,9 +490,22 @@ pub fn build(
             glib::timeout_add_local_once(
                 std::time::Duration::from_millis(u64::from(ASK_DEBOUNCE_MS)),
                 move || {
-                    if pending.get() == mine {
-                        ask_verdict(&host, verdict_port, &want, verdict, recompute);
+                    if pending.get() != mine {
+                        return;
                     }
+                    let asked = want.clone();
+                    ask_verdict(
+                        &host,
+                        verdict_port,
+                        &asked,
+                        Box::new(move |answer| {
+                            if let Some((restarts, after)) = answer {
+                                *verdict.borrow_mut() = Some((want, restarts, after));
+                                aged.set(false);
+                                recompute();
+                            }
+                        }),
+                    );
                 },
             );
         }
@@ -488,7 +528,11 @@ pub fn build(
         widget: sheet.clone(),
         state: gtk::ToggleButton::new(),
         set_btn: set_btn.clone(),
+        busy: busy.clone(),
     };
+
+    // Bumped on every open, so a tick from an earlier opening stops itself.
+    let opened = Rc::new(Cell::new(0u64));
 
     settime.state.connect_toggled({
         let sheet = sheet.clone();
@@ -498,6 +542,9 @@ pub fn build(
         let (hour, minute) = (hour.clone(), minute.clone());
         let standing = standing.clone();
         let verdict = verdict.clone();
+        let aged = aged.clone();
+        let busy = busy.clone();
+        let opened = opened.clone();
         let verdict_host = verdict_host.clone();
         move |t| {
             if t.is_active() {
@@ -508,12 +555,26 @@ pub fn build(
                     hour.set(now.hour());
                     minute.set(now.minute());
                 }
-                // Asked once per opening, not per tap: the answer does not go
-                // stale while the card is up, and a unit per keystroke on the
-                // host would be an absurd price for wording a label.
+                // Standing is asked once per opening: it does not drift.
                 standing.set(None);
                 verdict.replace(None);
+                aged.set(false);
+                busy.set(false);
                 recompute();
+                let mine = opened.get().wrapping_add(1);
+                opened.set(mine);
+                glib::timeout_add_seconds_local(REFRESH_SECS, {
+                    let (t, opened, aged, recompute) =
+                        (t.clone(), opened.clone(), aged.clone(), recompute.clone());
+                    move || {
+                        if !t.is_active() || opened.get() != mine {
+                            return glib::ControlFlow::Break;
+                        }
+                        aged.set(true);
+                        recompute();
+                        glib::ControlFlow::Continue
+                    }
+                });
                 ask_standing(
                     &verdict_host,
                     verdict_port,
@@ -549,28 +610,57 @@ pub fn build(
         let calendar = calendar.clone();
         let (hour, minute) = (hour, minute);
         set_btn.connect_clicked(move |btn| {
-            if !me.is_open() {
+            if !me.is_open() || me.busy.get() {
                 return;
             }
-            let want = format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}",
-                calendar.year(),
-                calendar.month() + 1,
-                calendar.day(),
-                hour.get(),
-                minute.get()
-            );
-            let restarts = btn.has_css_class("kiosk-settime-set-restart");
-            log::info!("set-time: sending {want:?} to {host}:{port} (restarts={restarts})");
+            let want = wire_target(&calendar, hour.get(), minute.get());
+            let shown = btn.has_css_class("kiosk-settime-set-restart");
+            let opening = opened.get();
+            me.busy.set(true);
             btn.set_sensitive(false);
-            send(
-                &host,
-                port,
-                &want,
-                shared.clone(),
-                reporter.clone(),
-                me.clone(),
-                restarts,
+            // Ask again now: the button may be up to a tick old.
+            let (me, shared, reporter, host) =
+                (me.clone(), shared.clone(), reporter.clone(), host.clone());
+            let (verdict, aged, recompute, opened) = (
+                verdict.clone(),
+                aged.clone(),
+                recompute.clone(),
+                opened.clone(),
+            );
+            let asked = want.clone();
+            ask_verdict(
+                &verdict_host,
+                verdict_port,
+                &asked,
+                Box::new(move |answer| {
+                    // A reply for an earlier opening must never send.
+                    if opened.get() != opening {
+                        return;
+                    }
+                    if !me.is_open() {
+                        me.busy.set(false);
+                        return;
+                    }
+                    // Unreachable host: what the button shows now.
+                    let restarts = answer.map_or_else(
+                        || me.set_btn.has_css_class("kiosk-settime-set-restart"),
+                        |(r, _)| r,
+                    );
+                    if let Some((r, after)) = answer {
+                        *verdict.borrow_mut() = Some((want.clone(), r, after));
+                        aged.set(false);
+                    }
+                    if restarts != shown {
+                        log::info!("set-time: {want:?} now restart={restarts}; not sending");
+                        me.busy.set(false);
+                        // Re-enter the state so a restart re-arms.
+                        me.set_btn.remove_css_class("kiosk-settime-set-restart");
+                        recompute();
+                        return;
+                    }
+                    log::info!("set-time: sending {want:?} to {host}:{port} (restarts={restarts})");
+                    send(&host, port, &want, shared, reporter, me, restarts);
+                }),
             );
         });
     }
@@ -582,13 +672,15 @@ pub fn build(
 ///
 /// The host parses `want` in its own zone against its own clock, so neither
 /// gui-vm's zone nor its clock enters the answer. Composing the two was the bug.
-fn ask_verdict(host: &str, port: u16, want: &str, verdict: Verdict, recompute: Rc<dyn Fn()>) {
+fn ask_verdict(host: &str, port: u16, want: &str, on_reply: OnVerdict) {
     let client = gio::SocketClient::new();
+    client.set_timeout(ASK_TIMEOUT_SECS);
     let line = format!("{want}\n");
     let want = want.to_owned();
     client.connect_to_host_async(host, port, gio::Cancellable::NONE, move |res| {
         let Ok(conn) = res else {
             log::warn!("set-time: no clock verdict from the host");
+            on_reply(None);
             return;
         };
         conn.output_stream().write_all_async(
@@ -597,6 +689,7 @@ fn ask_verdict(host: &str, port: u16, want: &str, verdict: Verdict, recompute: R
             gio::Cancellable::NONE,
             move |res| {
                 if res.is_err() {
+                    on_reply(None);
                     return;
                 }
                 let istream = conn.input_stream();
@@ -606,19 +699,19 @@ fn ask_verdict(host: &str, port: u16, want: &str, verdict: Verdict, recompute: R
                     gio::Cancellable::NONE,
                     move |res| {
                         let _conn = conn;
-                        let Ok((buf, n, _)) = res else { return };
+                        let Ok((buf, n, _)) = res else {
+                            on_reply(None);
+                            return;
+                        };
                         let reply = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        match parse_verdict(&reply) {
-                            Some((restarts, after)) => {
-                                log::info!("set-time: host says {want:?} -> restart={restarts} after={after}s");
-                                *verdict.borrow_mut() = Some((want, restarts, after));
-                                recompute();
-                            }
-                            None => log::warn!(
-                                "set-time: unusable verdict {:?}",
-                                reply.trim()
+                        let answer = parse_verdict(&reply);
+                        match answer {
+                            Some((restarts, after)) => log::info!(
+                                "set-time: host says {want:?} -> restart={restarts} after={after}s"
                             ),
+                            None => log::warn!("set-time: unusable verdict {:?}", reply.trim()),
                         }
+                        on_reply(answer);
                     },
                 );
             },
@@ -631,6 +724,7 @@ fn ask_verdict(host: &str, port: u16, want: &str, verdict: Verdict, recompute: R
 /// and a banner for a label's wording would be noise.
 fn ask_standing(host: &str, port: u16, standing: Standing, recompute: Rc<dyn Fn()>) {
     let client = gio::SocketClient::new();
+    client.set_timeout(ASK_TIMEOUT_SECS);
     client.connect_to_host_async(host, port, gio::Cancellable::NONE, move |res| {
         let conn = match res {
             Ok(c) => c,
@@ -702,7 +796,7 @@ fn send(
             Ok(c) => c,
             Err(e) => {
                 reporter.error(&format!("Could not reach the clock service: {e}"));
-                card.set_btn.set_sensitive(true);
+                card.ready();
                 return;
             }
         };
@@ -713,7 +807,7 @@ fn send(
             move |res| {
                 if let Err((_, e)) = res {
                     reporter.error(&format!("Could not send the time: {e}"));
-                    card.set_btn.set_sensitive(true);
+                    card.ready();
                     return;
                 }
                 let istream = conn.input_stream();
@@ -728,7 +822,7 @@ fn send(
                             Ok((buf, n, _)) => String::from_utf8_lossy(&buf[..n]).trim().to_owned(),
                             Err((_, e)) => {
                                 reporter.error(&format!("No reply from the clock service: {e}"));
-                                card.set_btn.set_sensitive(true);
+                                card.ready();
                                 return;
                             }
                         };
@@ -743,7 +837,7 @@ fn send(
                             }
                             other => {
                                 reporter.error(&format!("Could not set the clock: {other}"));
-                                card.set_btn.set_sensitive(true);
+                                card.ready();
                             }
                         }
                     },
