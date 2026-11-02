@@ -136,6 +136,7 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
         {
             // The kiosk owns this one: the press opens a card, nothing dispatches.
             let card = crate::settime::build(
+                &spec.id,
                 host,
                 *port,
                 *reboot_threshold_sec,

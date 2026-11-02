@@ -300,6 +300,7 @@ where
         } = &item.action
         {
             let card = crate::settime::build(
+                &item.id,
                 host,
                 *port,
                 *reboot_threshold_sec,

@@ -7,11 +7,11 @@
 //! microVM does not go through the guest's logind, so `PrepareForShutdown`
 //! never fires here -- and even where it does, it fires seconds before the
 //! screen blanks, too late to cover the wait before the reboot. So the thing
-//! that starts the reboot writes the marker instead: `sfo-set-time` in
-//! tiiuae/ghaf-sfo-laptop touches `$XDG_RUNTIME_DIR/sfo-kiosk-restarting` the
-//! moment a clock correction that will restart is confirmed, well before the
-//! host's own delay. Anything else that wants this screen can touch the same
-//! file.
+//! that starts the reboot writes the marker instead: the Set Time card
+//! (settime.rs, via `request_restart`) touches
+//! `$XDG_RUNTIME_DIR/sfo-kiosk-restarting` the moment net-vm accepts a
+//! correction that will restart, well before the host's own delay. Anything
+//! else that wants this screen can touch the same file.
 //!
 //! The overlay is an in-window widget stacked above everything else in the
 //! same `gtk::Overlay` -- never a `gtk::Window`, for the reason ui.rs gives.
@@ -27,9 +27,8 @@ use gtk::prelude::*;
 
 use crate::shared::Shared;
 
-/// Basename under `$XDG_RUNTIME_DIR`. Kept in step with the `sfo-set-time`
-/// dialog in tiiuae/ghaf-sfo-laptop by hand -- a mismatch just means the screen
-/// does not show, so it is commented on both sides rather than machine-checked.
+/// Basename under `$XDG_RUNTIME_DIR`. Anything outside the kiosk that touches
+/// it must spell it the same; a mismatch just means the screen does not show.
 const MARKER: &str = "sfo-kiosk-restarting";
 
 #[derive(Clone)]

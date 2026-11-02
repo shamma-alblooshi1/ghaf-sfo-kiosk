@@ -22,7 +22,7 @@ use crate::actions::{Busy, Reporter};
 use crate::banner::Banner;
 use crate::confirm::Confirm;
 use crate::radial::Fan;
-use crate::settime::SetTime;
+use crate::settime::{Model, SetTime};
 use crate::shutdown::{MonitorHold, Restarting};
 
 /// A `Reporter` that says the same thing on every output.
@@ -52,6 +52,8 @@ impl Reporter for Broadcast {
     }
 }
 
+type SetTimeModels = Rc<RefCell<Vec<(String, Rc<Model>)>>>;
+
 /// Everything the per-output surfaces hold in common.
 #[derive(Clone, Default)]
 pub struct Shared {
@@ -74,6 +76,9 @@ pub struct Shared {
     /// (button id, card). Keyed like `confirms`: the same Set Time button on
     /// two outputs opens and closes as one.
     settimes: Rc<RefCell<Vec<(String, SetTime)>>>,
+    /// (button id, model). What those cards show and ask the host, held once
+    /// so every screen shows one card and asks one question.
+    settime_models: SetTimeModels,
     /// Every output's restart screen. No id: a pending restart is one state for
     /// the whole machine, so they all show or hide together.
     restarting: Rc<RefCell<Vec<Restarting>>>,
@@ -117,6 +122,18 @@ impl Shared {
         b
     }
 
+    /// The one Set Time model for this button id, shared across every output --
+    /// created on first ask, like `busy_for`.
+    pub fn settime_model(&self, button_id: &str) -> Rc<Model> {
+        let mut models = self.settime_models.borrow_mut();
+        if let Some((_, m)) = models.iter().find(|(id, _)| id == button_id) {
+            return m.clone();
+        }
+        let m = Rc::new(Model::default());
+        models.push((button_id.to_owned(), m.clone()));
+        m
+    }
+
     /// Drop registrations whose surface has been destroyed.
     ///
     /// Unplugging a screen destroys its window (outputs.rs); without this, every
@@ -138,6 +155,9 @@ impl Shared {
         self.settimes
             .borrow_mut()
             .retain(|(_, s)| s.widget.root().is_some());
+        for (_, m) in self.settime_models.borrow().iter() {
+            m.prune();
+        }
         self.restarting
             .borrow_mut()
             .retain(|r| r.widget.root().is_some());
