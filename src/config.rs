@@ -472,14 +472,28 @@ impl Action {
                         reason: "action kind \"set-time\" has port 0".to_owned(),
                     };
                 }
-                // An unusable verdict target is not fatal: the card still sets
-                // the clock, and says its restart wording is unconfirmed.
+                // An unreachable verdict host is not fatal: the card still sets
+                // the clock, and says its restart wording is unconfirmed. A port
+                // that can never answer is a config error, so it is refused.
                 let verdict_host = raw
                     .verdict_host
                     .clone()
                     .filter(|h| !h.trim().is_empty())
                     .unwrap_or_else(|| "ghaf-host".to_owned());
                 let verdict_port = raw.verdict_port.unwrap_or(9956);
+                if verdict_port == 0 {
+                    return Self::Unsupported {
+                        reason: "action kind \"set-time\" has verdict_port 0".to_owned(),
+                    };
+                }
+                // The probe is harmless only while it reaches a different socket.
+                if verdict_port == port && verdict_host.trim().eq_ignore_ascii_case(host.trim()) {
+                    return Self::Unsupported {
+                        reason:
+                            "action kind \"set-time\" asks its verdict of the clock socket itself"
+                                .to_owned(),
+                    };
+                }
                 Self::SetTime {
                     host,
                     port,
@@ -1527,5 +1541,34 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(k.buttons[0].action, Action::Unsupported { .. }));
+    }
+
+    #[test]
+    fn set_time_with_verdict_port_zero_is_unsupported() {
+        let k = parse(
+            r#"{"version":1,"buttons":[{"id":"t","label":"Set Time","action":{
+                 "kind":"set-time","verdict_port":0}}]}"#,
+        )
+        .unwrap();
+        let Action::Unsupported { reason } = &k.buttons[0].action else {
+            panic!("expected Unsupported");
+        };
+        assert!(reason.contains("verdict_port 0"), "got: {reason}");
+    }
+
+    /// Pointed at the clock socket, the probe would be sent to the one service
+    /// that moves the clock.
+    #[test]
+    fn set_time_refuses_a_verdict_target_that_is_the_clock_socket() {
+        let k = parse(
+            r#"{"version":1,"buttons":[{"id":"t","label":"Set Time","action":{
+                 "kind":"set-time","host":"net-vm","port":9955,
+                 "verdict_host":"Net-VM","verdict_port":9955}}]}"#,
+        )
+        .unwrap();
+        let Action::Unsupported { reason } = &k.buttons[0].action else {
+            panic!("expected Unsupported");
+        };
+        assert!(reason.contains("clock socket"), "got: {reason}");
     }
 }
