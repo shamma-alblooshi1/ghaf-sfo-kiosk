@@ -35,6 +35,13 @@ pub fn icon_image(icon: &str) -> gtk::Image {
     }
 }
 
+/// Cards built per output but added to the overlay last; see `build`.
+#[derive(Default)]
+pub struct PendingCards {
+    pub confirms: Vec<(String, confirm::Confirm)>,
+    pub settimes: Vec<(String, crate::settime::SetTime)>,
+}
+
 /// Build the whole kiosk surface content for one output.
 ///
 /// `monitor` is the output size in logical pixels; it sets the corner menus'
@@ -93,8 +100,7 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
 
     // Collected, not added here: every card must sit ABOVE every fan, and only
     // the assembly below knows when the last fan has been added.
-    let mut pending_confirms: Vec<(String, confirm::Confirm)> = Vec::new();
-    let mut pending_settimes: Vec<(String, crate::settime::SetTime)> = Vec::new();
+    let mut pending = PendingCards::default();
 
     for spec in &kiosk.buttons {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
@@ -144,7 +150,7 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
                 *verdict_port,
                 shared,
             );
-            pending_settimes.push((spec.id.clone(), card.clone()));
+            pending.settimes.push((spec.id.clone(), card.clone()));
             button.connect_clicked(move |_| card.open());
         } else {
             let action = spec.action.clone();
@@ -160,7 +166,7 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
                 // Opening the card is all the press does; `fire` is handed to the
                 // card and runs only if the operator confirms.
                 let card = confirm::build(spec_confirm, &spec.label, fire);
-                pending_confirms.push((spec.id.clone(), card.clone()));
+                pending.confirms.push((spec.id.clone(), card.clone()));
                 button.connect_clicked(move |_| card.open());
             } else {
                 button.connect_clicked(move |_| fire());
@@ -202,8 +208,7 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
                 &reporter,
                 &scrim_widget,
                 shared,
-                &mut pending_confirms,
-                &mut pending_settimes,
+                &mut pending,
             );
             overlay.add_overlay(&fan.widget);
             // Link this menu to the SAME menu on every other output, so opening
@@ -219,7 +224,8 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
     // stacking is grid -> scrim -> fans -> confirms, bottom to top. A menu
     // member can confirm too, and its card must not open behind the fan it
     // was pressed in.
-    let confirms: Vec<confirm::Confirm> = pending_confirms
+    let confirms: Vec<confirm::Confirm> = pending
+        .confirms
         .into_iter()
         .map(|(id, card)| {
             overlay.add_overlay(&card.widget);
@@ -233,7 +239,7 @@ pub fn build(kiosk: &Kiosk, monitor: (f64, f64), shared: &crate::shared::Shared)
 
     // Above the confirm cards, below the restart screen: the Set Time card is a
     // deliberate flow the operator opened, but a pending restart still trumps it.
-    for (id, card) in pending_settimes {
+    for (id, card) in pending.settimes {
         overlay.add_overlay(&card.widget);
         shared.register_settime(&id, &card);
     }
